@@ -1,0 +1,67 @@
+name: Pipeline
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v2
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v2
+        with:
+          node-version: '18'
+
+      - name: Generate Environment File
+        run: |
+          chmod +x env_generator.sh
+          ./env_generator.sh
+
+      - name: Build Docker image
+        run: docker build -t harshit3355/peer:latest .
+      
+
+      - name: Login to docker hub
+        run: echo ${{ secrets.DOCKERHUB_PASSWORD }} | docker login -u ${{ secrets.DOCKERHUB_USERNAME }} --password-stdin
+      
+      - name: Push Image to Docker Hub
+        run: docker push harshit3355/peer:latest
+
+      - name: Deploy to EC2
+        env:
+           EC2_HOST: ${{ secrets.EC2_HOST }}
+           EC2_USER: ${{ secrets.EC2_USER }}
+           EC2_KEY: ${{ secrets.EC2_KEY }}
+        run: |
+           echo "${EC2_KEY}" > private_key.pem
+           chmod 600 private_key.pem
+
+           echo "Testing SSH connection..."
+           ssh -o StrictHostKeyChecking=no -i private_key.pem $EC2_USER@$EC2_HOST "echo 'SSH connection successful.'"
+
+           echo "Running remote commands..."
+           ssh -o StrictHostKeyChecking=no -i private_key.pem $EC2_USER@$EC2_HOST << 'EOF'
+             set -e
+             cd
+             cd ..
+             ls
+             cd ..
+             ls -l
+             cd srv/
+             sudo rm -rf strapi/
+             ls
+             sudo docker ps
+             sudo docker stop strapi-container
+             sudo docker rm strapi-container
+             sudo docker ps -a
+             sudo docker images
+             sudo docker rmi harshit3355/peer:latest
+             sudo docker images
+             sudo docker pull harshit3355/peer:latest
+             sudo docker run -d --name strapi-container -p 1337:1337 -v strapi-data:/srv/strapi/public/uploads harshit3355/peer:latest
+           EOF
